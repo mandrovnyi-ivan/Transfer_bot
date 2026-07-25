@@ -1,0 +1,25 @@
+services:
+  bot:
+    image: python:3.11-slim
+    working_dir: /app
+    command: sh -c "pip install --no-cache-dir -r requirements.txt && python main.py"
+    env_file:
+      - .env
+    environment:
+      RSSHUB_URL: http://rsshub:1200
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - rsshub
+
+  rsshub:
+    image: diygod/rsshub:latest
+    restart: unless-stopped
+    ports:
+      - "1200:1200"
+    environment:
+      TWITTER_AUTH_TOKEN: ${TWITTER_AUTH_TOKEN}
+      CACHE_EXPIRE: 60

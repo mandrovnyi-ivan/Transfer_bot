@@ -1,0 +1,37 @@
+x_accounts:
+  - {username: FabrizioRomano, tier: tier1, lang: en, scope: global, independent: true, enabled: true}
+  - {username: David_Ornstein, tier: tier1, lang: en, scope: england, independent: true, enabled: true}
+  - {username: Plettigoal, tier: tier1, lang: de, scope: germany, independent: true, enabled: true}
+  - {username: MatteMoretto, tier: tier1, lang: es, scope: spain, independent: true, enabled: true}
+  - {username: NicoSchira, tier: tier2, lang: it, scope: italy, independent: true, enabled: true}
+  - {username: DiMarzio, tier: tier2, lang: it, scope: italy, independent: true, enabled: true}
+  - {username: Santi_J_FM, tier: tier2, lang: fr, scope: france, independent: true, enabled: true}
+  - {username: JacobsBen, tier: tier1, lang: en, scope: england, independent: true, enabled: true}
+  - {username: gerardromero, tier: tier2, lang: es, scope: barcelona, independent: true, enabled: true}
+  - {username: AlfredoPedulla, tier: yellow, lang: it, scope: italy, independent: true, enabled: true}
+  - {username: tuttosport, tier: yellow, lang: it, scope: italy, independent: true, enabled: true}
+  - {username: MundoDeportivo, tier: yellow, lang: es, scope: spain, independent: true, enabled: true}
+  - {username: sport, tier: yellow, lang: es, scope: spain, independent: true, enabled: true}
+  - {username: SunSport, tier: yellow, lang: en, scope: england, independent: true, enabled: true}
+  - {username: MailSport, tier: yellow, lang: en, scope: england, independent: true, enabled: true}
+  - {username: TEAMtalk, tier: yellow, lang: en, scope: england, independent: true, enabled: true}
+  - {username: Fichajes_web, tier: rumor, lang: es, scope: global, independent: false, enabled: true}
+
+rss_feeds:
+  - {name: BBC Sport Football, url: "https://feeds.bbci.co.uk/sport/football/rss.xml", tier: tier1, lang: en, independent: true, enabled: true}
+  - {name: Guardian Football, url: "https://www.theguardian.com/football/rss", tier: tier1, lang: en, independent: true, enabled: true}
+  - {name: Sky Sports Football, url: "https://www.skysports.com/rss/12040", tier: tier1, lang: en, independent: true, enabled: true}
+
+nitter_instances: []
+
+transfer_markers:
+  en: [here we go, done deal, medical, agreement, bid, talks, transfer, signing,
+       joins, personal terms, fee agreed, loan, release clause, hijack]
+  it: [fatta, accordo, visite mediche, trattativa, ufficiale, firma,
+       calciomercato, prestito, offerta]
+  es: [acuerdo, fichaje, cerrado, oficial, negociacion, traspaso,
+       reconocimiento medico, cesion, oferta]
+  de: [einigung, wechselt, medizincheck, verpflichtet, transfer, vertrag, leihe]
+  fr: [accord, transfert, signature, officiel, negociations, visite medicale, pret]
+
+target_leagues: [premier_league, la_liga, serie_a, bundesliga, ligue_1, champions_league]
