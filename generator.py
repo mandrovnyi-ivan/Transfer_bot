@@ -247,7 +247,7 @@ def validate_post_payload(
         problems.append("нужна ровно одна конструкция из списка")
     if payload.insert_used.casefold() not in used_inserts:
         problems.append("insert_used не совпадает с текстом")
-    if payload.insert_used.casefold() in {item.casefold() for item in recent_inserts}:
+    if normalize_insert_value(payload.insert_used) in {normalize_insert_value(item) for item in recent_inserts}:
         problems.append("insert_used уже был в recent_inserts")
     if stars == 5 and payload.insert_used.casefold() in SKEPTICISM_INSERTS:
         problems.append("скепсис запрещён при 5 звёздах")
@@ -313,9 +313,11 @@ class PostGenerator:
         recent_inserts: list[str],
     ) -> GenerationResult:
         problems_hint: list[str] = []
-        warnings: list[str] = []
         last_payload: GeneratedPost | None = None
         last_text = ""
+        best_payload: GeneratedPost | None = None
+        best_text = ""
+        best_problems: list[str] | None = None
 
         for attempt in range(2):
             payload = await self._call_model(
@@ -345,16 +347,19 @@ class PostGenerator:
             )
             last_payload = payload
             last_text = text
+            if best_problems is None or len(problems) < len(best_problems):
+                best_payload = payload
+                best_text = text
+                best_problems = list(problems)
             if not problems:
                 return GenerationResult(payload=payload, text=text, problems=[], warnings=[])
             problems_hint = problems
 
-        warnings = [f"⚠️ {', '.join(problems_hint)}"] if problems_hint else []
         return GenerationResult(
-            payload=last_payload or GeneratedPost(news="", reliability_note="", comment="", insert_used=""),
-            text=last_text,
-            problems=problems_hint,
-            warnings=warnings,
+            payload=best_payload or last_payload or GeneratedPost(news="", reliability_note="", comment="", insert_used=""),
+            text=best_text or last_text,
+            problems=best_problems or problems_hint,
+            warnings=[],
         )
 
     async def _call_model(

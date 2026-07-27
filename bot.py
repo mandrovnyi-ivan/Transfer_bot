@@ -232,8 +232,6 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             return
 
         text = result.text
-        if result.warnings:
-            text = f"{result.warnings[0]}\n\n{text}"
         await bot.send_message(
             state.owner_id,
             text,

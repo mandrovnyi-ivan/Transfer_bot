@@ -219,17 +219,23 @@ class Database:
             await db.commit()
             return int(cursor.lastrowid)
 
-    async def recent_inserts(self, limit: int = 5) -> list[str]:
+    async def recent_inserts(self, limit: int = 5, *, exclude_news_id: int | None = None) -> list[str]:
+        where_clause = "WHERE insert_used IS NOT NULL AND insert_used != ''"
+        params: list[Any] = []
+        if exclude_news_id is not None:
+            where_clause += " AND news_id != ?"
+            params.append(exclude_news_id)
+        params.append(limit)
         async with self.connection() as db:
             async with db.execute(
-                """
+                f"""
                 SELECT insert_used
                 FROM posts
-                WHERE insert_used IS NOT NULL AND insert_used != ''
+                {where_clause}
                 ORDER BY id DESC
                 LIMIT ?
                 """,
-                (limit,),
+                tuple(params),
             ) as cursor:
                 rows = await cursor.fetchall()
         ignored = {"", "none", "null", "нет"}

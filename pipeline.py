@@ -204,48 +204,45 @@ class TransferPipeline:
             previous_stars = int(cluster.stars or 1)
             cluster_source_tier = cluster.source_tier or "rumor"
             is_upgrade = self._is_higher_tier(item.source_tier, cluster_source_tier)
-            update_payload: dict[str, Any] = {
+            cluster_update: dict[str, Any] = {
                 "mention_count": mention_count,
                 "source_names_json": json.dumps(merged_sources, ensure_ascii=False),
                 "last_seen_at": self._published_at(item.published_at) or utcnow_iso(),
                 "stars": max(previous_stars, stars),
             }
-            if len(extracted.player_slug) > len(cluster.player_slug or ""):
-                update_payload["player_slug"] = extracted.player_slug
-            if len(extracted.player) > len(cluster.player_name or ""):
-                update_payload["player_name"] = extracted.player
-            if cluster.fee is None and extracted.fee:
-                update_payload["fee"] = extracted.fee
-            if cluster.from_club is None and extracted.from_club:
-                update_payload["from_club"] = extracted.from_club
-            if cluster.to_club is None and extracted.to_club:
-                update_payload["to_club"] = extracted.to_club
-            if stars > previous_stars:
-                update_payload["news_type"] = extracted.type
-            if is_upgrade:
-                update_payload.update(
+            await self.database.update_news(cluster.id, cluster_update)
+
+            if deliver_notifications and is_upgrade:
+                upgrade_news_id = await self.database.insert_news(
                     {
+                        "hash": news_hash,
                         "source_name": item.source_name,
                         "source_tier": item.source_tier,
                         "url": item.url,
                         "title": item.title,
                         "raw_text": item.raw_text,
-                        "published_at": self._published_at(item.published_at),
+                        "player_name": extracted.player,
+                        "player_slug": extracted.player_slug,
+                        "from_club": extracted.from_club,
+                        "to_club": extracted.to_club,
+                        "fee": extracted.fee,
                         "news_type": extracted.type,
                         "stars": stars,
-                        "player_slug": extracted.player_slug,
-                        "player_name": extracted.player,
+                        "mention_count": mention_count,
+                        "source_names_json": json.dumps(merged_sources, ensure_ascii=False),
+                        "last_seen_at": self._published_at(item.published_at) or utcnow_iso(),
+                        "published_at": self._published_at(item.published_at),
                     }
                 )
-            await self.database.update_news(cluster.id, update_payload)
-
-            if deliver_notifications and is_upgrade:
+                if upgrade_news_id == 0:
+                    LOGGER.warning("Upgrade notification skipped because news hash already exists: %s", item.url)
+                    return True
                 await self.notifier(
                     NotificationNews(
-                        news_id=cluster.id,
+                        news_id=upgrade_news_id,
                         raw=item,
                         extracted=extracted,
-                        stars=int(update_payload["stars"]),
+                        stars=stars,
                         reasons=reasons,
                         is_upgrade=True,
                         previous_stars=previous_stars,
@@ -344,7 +341,7 @@ TEXT: {item.raw_text}
 
     async def generate_post_for_news(self, news_id: int) -> GenerationResult:
         news = await self.require_news(news_id)
-        recent_inserts = await self.database.recent_inserts(5)
+        recent_inserts = await self.database.recent_inserts(5, exclude_news_id=news.id)
         stars = int(news.stars or 1)
         reasons = calculate_reliability(news.source_tier or "rumor", news.news_type or "rumor")[1]
         result = await self.generator.generate(
@@ -372,6 +369,8 @@ TEXT: {item.raw_text}
             },
             insert_used=result.payload.insert_used,
         )
+        if result.problems:
+            LOGGER.warning("Post validation fallback for news #%s: %s", news.id, ", ".join(result.problems))
         return result
 
     async def require_news(self, news_id: int) -> NewsRow:
