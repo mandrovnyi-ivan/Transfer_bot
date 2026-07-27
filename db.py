@@ -30,6 +30,9 @@ class NewsRow:
     fee: str | None
     news_type: str | None
     stars: int | None
+    mention_count: int | None
+    source_names_json: str | None
+    last_seen_at: str | None
     published_at: str | None
     created_at: str | None
 
@@ -73,6 +76,9 @@ class Database:
                     fee TEXT,
                     news_type TEXT,
                     stars INTEGER,
+                    mention_count INTEGER DEFAULT 1,
+                    source_names_json TEXT DEFAULT '[]',
+                    last_seen_at TIMESTAMP,
                     published_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -88,7 +94,17 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_news_player ON news(player_slug);
                 """
             )
+            await self._ensure_news_column(db, "mention_count", "INTEGER DEFAULT 1")
+            await self._ensure_news_column(db, "source_names_json", "TEXT DEFAULT '[]'")
+            await self._ensure_news_column(db, "last_seen_at", "TIMESTAMP")
             await db.commit()
+
+    async def _ensure_news_column(self, db: aiosqlite.Connection, name: str, definition: str) -> None:
+        async with db.execute("PRAGMA table_info(news)") as cursor:
+            rows = await cursor.fetchall()
+        existing = {row["name"] for row in rows}
+        if name not in existing:
+            await db.execute(f"ALTER TABLE news ADD COLUMN {name} {definition}")
 
     async def has_news_hash(self, news_hash: str) -> bool:
         async with self.connection() as db:
@@ -115,6 +131,65 @@ class Database:
             async with db.execute("SELECT * FROM news WHERE id = ?", (news_id,)) as cursor:
                 row = await cursor.fetchone()
         return NewsRow(**dict(row)) if row else None
+
+    async def find_recent_cluster(
+        self,
+        *,
+        player_slugs: list[str],
+        to_club: str | None,
+        hours: int = 48,
+    ) -> NewsRow | None:
+        clean_slugs = [slug for slug in dict.fromkeys(player_slugs) if slug]
+        if not clean_slugs:
+            return None
+        placeholders = ", ".join("?" for _ in clean_slugs)
+        params = (
+            *clean_slugs,
+            (to_club or "").strip().casefold(),
+            f"-{hours} hours",
+        )
+        async with self.connection() as db:
+            async with db.execute(
+                f"""
+                SELECT *
+                FROM news
+                WHERE player_slug IN ({placeholders})
+                  AND lower(trim(coalesce(to_club, ''))) = ?
+                  AND datetime(coalesce(last_seen_at, published_at, created_at)) >= datetime('now', ?)
+                  AND news_type != 'filtered_out'
+                ORDER BY datetime(coalesce(last_seen_at, published_at, created_at)) DESC, id DESC
+                LIMIT 1
+                """,
+                params,
+            ) as cursor:
+                row = await cursor.fetchone()
+        return NewsRow(**dict(row)) if row else None
+
+    async def update_news(self, news_id: int, payload: dict[str, Any]) -> None:
+        if not payload:
+            return
+        assignments = ", ".join(f"{column} = ?" for column in payload)
+        values = (*payload.values(), news_id)
+        async with self.connection() as db:
+            await db.execute(f"UPDATE news SET {assignments} WHERE id = ?", values)
+            await db.commit()
+
+    async def recent_player_rows(self, limit: int = 500, days: int = 180) -> list[NewsRow]:
+        async with self.connection() as db:
+            async with db.execute(
+                """
+                SELECT *
+                FROM news
+                WHERE player_slug IS NOT NULL
+                  AND player_slug != ''
+                  AND datetime(coalesce(last_seen_at, published_at, created_at)) >= datetime('now', ?)
+                ORDER BY datetime(coalesce(last_seen_at, published_at, created_at)) DESC, id DESC
+                LIMIT ?
+                """,
+                (f"-{days} days", limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [NewsRow(**dict(row)) for row in rows]
 
     async def recent_news_by_tiers(self, tiers: list[str], limit: int = 1000) -> list[NewsRow]:
         if not tiers:

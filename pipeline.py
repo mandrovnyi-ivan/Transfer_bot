@@ -16,9 +16,9 @@ try:
 except ImportError:  # pragma: no cover - exercised only without runtime deps
     AsyncAnthropic = None  # type: ignore[assignment]
 
-from db import Database, NewsRow
+from db import Database, NewsRow, utcnow_iso
 from generator import GenerationResult, PostGenerator
-from reliability import calculate_reliability
+from reliability import BASE_STARS, calculate_reliability
 from settings import Settings
 from sources import RawNews
 
@@ -56,6 +56,10 @@ class NotificationNews:
     extracted: ExtractedNews
     stars: int
     reasons: list[str]
+    is_upgrade: bool = False
+    previous_stars: int | None = None
+    mention_count: int = 1
+    source_names: list[str] | None = None
 
 
 Notifier = Callable[[NotificationNews], Awaitable[None]]
@@ -66,6 +70,39 @@ def slugify(value: str) -> str:
     lowered = re.sub(r"[^a-z0-9а-яё]+", "-", lowered)
     lowered = re.sub(r"-{2,}", "-", lowered).strip("-")
     return lowered or "unknown-player"
+
+
+def normalize_club_name(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip()).casefold()
+
+
+def slug_aliases(value: str) -> list[str]:
+    parts = [part for part in value.split("-") if part]
+    aliases = [value]
+    if len(parts) > 1:
+        aliases.append(parts[-1])
+    return list(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def parse_source_names(value: str | None, fallback: str | None = None) -> list[str]:
+    names: list[str] = []
+    if value:
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                names.extend(str(item).strip() for item in parsed if str(item).strip())
+        except Exception:
+            pass
+    if fallback and fallback not in names:
+        names.append(fallback)
+    return names
+
+
+def merge_source_names(existing_json: str | None, new_source: str) -> list[str]:
+    names = parse_source_names(existing_json)
+    if new_source not in names:
+        names.append(new_source)
+    return names
 
 
 def normalize_url(url: str) -> str:
@@ -148,7 +185,76 @@ class TransferPipeline:
             )
             return True
 
+        extracted.player_slug = await self.resolve_player_slug(
+            player=extracted.player,
+            player_slug=extracted.player_slug,
+            from_club=extracted.from_club,
+            to_club=extracted.to_club,
+        )
+
         stars, reasons = calculate_reliability(item.source_tier, extracted.type)
+        cluster = await self.database.find_recent_cluster(
+            player_slugs=slug_aliases(extracted.player_slug),
+            to_club=extracted.to_club,
+            hours=48,
+        )
+        if cluster is not None:
+            merged_sources = merge_source_names(cluster.source_names_json, item.source_name)
+            mention_count = max(int(cluster.mention_count or 1) + 1, len(merged_sources))
+            previous_stars = int(cluster.stars or 1)
+            cluster_source_tier = cluster.source_tier or "rumor"
+            is_upgrade = self._is_higher_tier(item.source_tier, cluster_source_tier)
+            update_payload: dict[str, Any] = {
+                "mention_count": mention_count,
+                "source_names_json": json.dumps(merged_sources, ensure_ascii=False),
+                "last_seen_at": self._published_at(item.published_at) or utcnow_iso(),
+                "stars": max(previous_stars, stars),
+            }
+            if len(extracted.player_slug) > len(cluster.player_slug or ""):
+                update_payload["player_slug"] = extracted.player_slug
+            if len(extracted.player) > len(cluster.player_name or ""):
+                update_payload["player_name"] = extracted.player
+            if cluster.fee is None and extracted.fee:
+                update_payload["fee"] = extracted.fee
+            if cluster.from_club is None and extracted.from_club:
+                update_payload["from_club"] = extracted.from_club
+            if cluster.to_club is None and extracted.to_club:
+                update_payload["to_club"] = extracted.to_club
+            if stars > previous_stars:
+                update_payload["news_type"] = extracted.type
+            if is_upgrade:
+                update_payload.update(
+                    {
+                        "source_name": item.source_name,
+                        "source_tier": item.source_tier,
+                        "url": item.url,
+                        "title": item.title,
+                        "raw_text": item.raw_text,
+                        "published_at": self._published_at(item.published_at),
+                        "news_type": extracted.type,
+                        "stars": stars,
+                        "player_slug": extracted.player_slug,
+                        "player_name": extracted.player,
+                    }
+                )
+            await self.database.update_news(cluster.id, update_payload)
+
+            if deliver_notifications and is_upgrade:
+                await self.notifier(
+                    NotificationNews(
+                        news_id=cluster.id,
+                        raw=item,
+                        extracted=extracted,
+                        stars=int(update_payload["stars"]),
+                        reasons=reasons,
+                        is_upgrade=True,
+                        previous_stars=previous_stars,
+                        mention_count=mention_count,
+                        source_names=merged_sources,
+                    )
+                )
+            return True
+
         news_id = await self.database.insert_news(
             {
                 "hash": news_hash,
@@ -164,6 +270,9 @@ class TransferPipeline:
                 "fee": extracted.fee,
                 "news_type": extracted.type,
                 "stars": stars,
+                "mention_count": 1,
+                "source_names_json": json.dumps([item.source_name], ensure_ascii=False),
+                "last_seen_at": self._published_at(item.published_at) or utcnow_iso(),
                 "published_at": self._published_at(item.published_at),
             }
         )
@@ -178,6 +287,8 @@ class TransferPipeline:
                     extracted=extracted,
                     stars=stars,
                     reasons=reasons,
+                    mention_count=1,
+                    source_names=[item.source_name],
                 )
             )
         return True
@@ -286,3 +397,54 @@ TEXT: {item.raw_text}
         if item.published_at is None:
             return False
         return item.published_at.astimezone(self._local_tz).date() == datetime.now(self._local_tz).date()
+
+    async def resolve_player_slug(
+        self,
+        *,
+        player: str,
+        player_slug: str,
+        from_club: str | None,
+        to_club: str | None,
+    ) -> str:
+        candidate = slugify(player_slug or player)
+        aliases = slug_aliases(candidate)
+        rows = await self.database.recent_player_rows(limit=500, days=180)
+        current_from = normalize_club_name(from_club)
+        current_to = normalize_club_name(to_club)
+
+        for row in rows:
+            existing_slug = row.player_slug or ""
+            if not existing_slug or existing_slug == candidate:
+                continue
+            existing_aliases = slug_aliases(existing_slug)
+            alias_overlap = set(aliases) & set(existing_aliases)
+            if not alias_overlap:
+                continue
+            if not self._clubs_overlap(
+                current_from=current_from,
+                current_to=current_to,
+                row_from=normalize_club_name(row.from_club),
+                row_to=normalize_club_name(row.to_club),
+            ):
+                continue
+            if len(existing_slug) > len(candidate):
+                return existing_slug
+        return candidate
+
+    @staticmethod
+    def _clubs_overlap(
+        *,
+        current_from: str,
+        current_to: str,
+        row_from: str,
+        row_to: str,
+    ) -> bool:
+        current = {club for club in (current_from, current_to) if club}
+        row = {club for club in (row_from, row_to) if club}
+        if not current or not row:
+            return False
+        return not current.isdisjoint(row)
+
+    @staticmethod
+    def _is_higher_tier(candidate_tier: str, current_tier: str) -> bool:
+        return BASE_STARS.get(candidate_tier, 1) > BASE_STARS.get(current_tier, 1)

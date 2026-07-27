@@ -9,18 +9,18 @@ x_accounts:
   - {username: JacobsBen, tier: tier1, lang: en, scope: england, independent: true, enabled: true}
   - {username: gerardromero, tier: tier2, lang: es, scope: barcelona, independent: true, enabled: true}
   - {username: AlfredoPedulla, tier: yellow, lang: it, scope: italy, independent: true, enabled: true}
-  - {username: tuttosport, tier: yellow, lang: it, scope: italy, independent: true, enabled: true}
-  - {username: MundoDeportivo, tier: yellow, lang: es, scope: spain, independent: true, enabled: true}
-  - {username: sport, tier: yellow, lang: es, scope: spain, independent: true, enabled: true}
-  - {username: SunSport, tier: yellow, lang: en, scope: england, independent: true, enabled: true}
-  - {username: MailSport, tier: yellow, lang: en, scope: england, independent: true, enabled: true}
-  - {username: TEAMtalk, tier: yellow, lang: en, scope: england, independent: true, enabled: true}
-  - {username: Fichajes_web, tier: rumor, lang: es, scope: global, independent: false, enabled: true}
+  - {username: tuttosport, tier: yellow, lang: it, scope: italy, independent: true, enabled: false}
+  - {username: MundoDeportivo, tier: yellow, lang: es, scope: spain, independent: true, enabled: false}
+  - {username: sport, tier: yellow, lang: es, scope: spain, independent: true, enabled: false}
+  - {username: SunSport, tier: yellow, lang: en, scope: england, independent: true, enabled: false}
+  - {username: MailSport, tier: yellow, lang: en, scope: england, independent: true, enabled: false}
+  - {username: TEAMtalk, tier: yellow, lang: en, scope: england, independent: true, enabled: false}
+  - {username: Fichajes_web, tier: rumor, lang: es, scope: global, independent: false, enabled: false}
 
 rss_feeds:
-  - {name: BBC Sport Football, url: "https://feeds.bbci.co.uk/sport/football/rss.xml", tier: tier1, lang: en, independent: true, enabled: true}
-  - {name: Guardian Football, url: "https://www.theguardian.com/football/rss", tier: tier1, lang: en, independent: true, enabled: true}
-  - {name: Sky Sports Football, url: "https://www.skysports.com/rss/12040", tier: tier1, lang: en, independent: true, enabled: true}
+  - {name: BBC Sport Football, url: "https://feeds.bbci.co.uk/sport/football/rss.xml", tier: tier1, lang: en, independent: true, enabled: false}
+  - {name: Guardian Football, url: "https://www.theguardian.com/football/rss", tier: tier1, lang: en, independent: true, enabled: false}
+  - {name: Sky Sports Football, url: "https://www.skysports.com/rss/12040", tier: tier1, lang: en, independent: true, enabled: false}
 
 nitter_instances: []
 

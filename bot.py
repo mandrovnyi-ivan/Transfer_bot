@@ -164,6 +164,8 @@ def format_notification(payload: NotificationNews, timezone_name: str) -> str:
     parts = [first_line]
     if fee_line:
         parts.append(fee_line)
+    if payload.is_upgrade and payload.previous_stars is not None:
+        parts.append(f"⬆️ Надёжность выросла: {render_stars(payload.previous_stars)} → {stars}")
     parts.extend(
         [
             "",
@@ -172,6 +174,7 @@ def format_notification(payload: NotificationNews, timezone_name: str) -> str:
             f"📡 {source_name}",
             *( [f"🕒 {publication_time}"] if publication_time else [] ),
             f"⭐ {stars}",
+            *([f"Подтверждений: {payload.mention_count}"] if payload.mention_count > 1 else []),
             f"🔗 {link}",
         ]
     )
