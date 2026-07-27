@@ -60,6 +60,15 @@ def draft_post_keyboard(post_id: int, *, has_comment: bool) -> InlineKeyboardMar
     return builder.as_markup()
 
 
+def publish_confirm_keyboard(post_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="✔️ Точно опубликовать", callback_data=f"publish_confirm:{post_id}"),
+        InlineKeyboardButton(text="✖️ Отмена", callback_data=f"publish_cancel:{post_id}"),
+    )
+    return builder.as_markup()
+
+
 def format_publication_time(published_at: datetime | None, timezone_name: str) -> str | None:
     if published_at is None:
         return None
@@ -444,24 +453,66 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.answer("Этот пост уже опубликован.")
             return
+        await callback.message.edit_reply_markup(reply_markup=publish_confirm_keyboard(post_id))
+        await callback.answer("Подтвердите публикацию.")
+
+    @router.callback_query(F.data.startswith("publish_confirm:"))
+    async def publish_confirm_handler(callback: CallbackQuery) -> None:
+        if not await ensure_owner(callback):
+            return
+        post_id = int(callback.data.split(":", 1)[1])
+        if not state.target_channel_id:
+            await callback.answer("TARGET_CHANNEL_ID не настроен.", show_alert=True)
+            return
+        try:
+            draft = await state.pipeline.get_draft_post(post_id)
+        except LookupError:
+            await callback.answer("Черновик не найден.", show_alert=True)
+            return
+        if draft.is_published:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.answer("Этот пост уже опубликован.")
+            return
         try:
             published_message = await bot.send_message(
                 state.target_channel_id,
                 draft.text,
+                parse_mode="HTML",
                 disable_web_page_preview=True,
             )
             await state.database.mark_post_published(post_id, channel_message_id=published_message.message_id)
         except Exception:
             LOGGER.exception("Failed to publish post #%s", post_id)
-            await callback.answer("Не удалось опубликовать пост.", show_alert=True)
+            await callback.message.edit_reply_markup(
+                reply_markup=draft_post_keyboard(post_id, has_comment=draft.has_comment)
+            )
+            await callback.answer(
+                "Не удалось опубликовать пост. Проверьте TARGET_CHANNEL_ID и права бота в канале.",
+                show_alert=True,
+            )
             return
-        published_text = f"{draft.text}\n\n✅ Опубликовано"
+        published_text = f"{draft.text}\n\n✅ Опубликовано в канал"
         await callback.message.edit_text(
             published_text,
             disable_web_page_preview=True,
             reply_markup=None,
         )
         await callback.answer("Опубликовано.")
+
+    @router.callback_query(F.data.startswith("publish_cancel:"))
+    async def publish_cancel_handler(callback: CallbackQuery) -> None:
+        if not await ensure_owner(callback):
+            return
+        post_id = int(callback.data.split(":", 1)[1])
+        try:
+            draft = await state.pipeline.get_draft_post(post_id)
+        except LookupError:
+            await callback.answer("Черновик не найден.", show_alert=True)
+            return
+        await callback.message.edit_reply_markup(
+            reply_markup=draft_post_keyboard(post_id, has_comment=draft.has_comment)
+        )
+        await callback.answer("Публикация отменена.")
 
     dispatcher.include_router(router)
     return router
