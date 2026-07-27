@@ -16,6 +16,9 @@ x_accounts:
   - {username: MailSport, tier: yellow, lang: en, scope: england, independent: true, enabled: false}
   - {username: TEAMtalk, tier: yellow, lang: en, scope: england, independent: true, enabled: false}
   - {username: Fichajes_web, tier: rumor, lang: es, scope: global, independent: false, enabled: false}
+  - {username: Ekremkonur, tier: yellow, lang: en, scope: global, independent: true, enabled: true}
+  - {username: CaughtOffside, tier: rumor, lang: en, scope: global, independent: false, enabled: true}
+  - {username: GraemeBailey, tier: rumor, lang: en, scope: england, independent: false, enabled: true}
 
 rss_feeds:
   - {name: BBC Sport Football, url: "https://feeds.bbci.co.uk/sport/football/rss.xml", tier: tier1, lang: en, independent: true, enabled: false}
