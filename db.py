@@ -132,6 +132,20 @@ class Database:
                 row = await cursor.fetchone()
         return NewsRow(**dict(row)) if row else None
 
+    async def latest_news(self, limit: int = 10) -> list[NewsRow]:
+        async with self.connection() as db:
+            async with db.execute(
+                """
+                SELECT *
+                FROM news
+                ORDER BY datetime(coalesce(last_seen_at, published_at, created_at)) DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [NewsRow(**dict(row)) for row in rows]
+
     async def find_recent_cluster(
         self,
         *,

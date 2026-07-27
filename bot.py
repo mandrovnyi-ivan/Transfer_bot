@@ -135,6 +135,16 @@ def render_debug_block(news) -> str:
     return "\n".join(lines)
 
 
+def render_test_post_pick(news) -> str:
+    emoji = TYPE_EMOJI.get(news.source_tier or "rumor", TYPE_EMOJI["rumor"])
+    player = news.player_name or "Игрок не определён"
+    from_club = news.from_club or "—"
+    to_club = news.to_club or "—"
+    source_name = news.source_name or "Источник неизвестен"
+    stars = int(news.stars or 0)
+    return f"[{news.id}] {emoji} {player} · {from_club} → {to_club} · {source_name} · ⭐{stars}"
+
+
 async def send_text_chunks(bot: Bot, chat_id: int, blocks: list[str], *, parse_mode: str = "HTML") -> None:
     current = ""
     for block in blocks:
@@ -221,7 +231,9 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             if callback is not None:
                 await callback.answer("Для этой карточки пост недоступен.", show_alert=True)
             elif message is not None:
-                await message.answer("Новость с таким id не найдена.")
+                await message.answer(
+                    f"Новость с id {news_id} не найдена, напиши /test_post чтобы увидеть список"
+                )
             return
         except Exception:
             LOGGER.exception("Failed to generate post for news #%s", news_id)
@@ -255,7 +267,7 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             return
         await message.answer(
             "Бот активен.\n"
-            "Команды: /sources, /pause, /resume, /test, /test_post {news_id}"
+            "Команды: /sources, /pause, /resume, /test, /test_post"
         )
 
     @router.message(Command("pause"))
@@ -332,7 +344,14 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
         if not await ensure_owner(message):
             return
         if not command.args:
-            await message.answer("Укажите id новости: /test_post 123")
+            latest_news = await state.database.latest_news(10)
+            if not latest_news:
+                await message.answer("В базе пока нет новостей.")
+                return
+            lines = [render_test_post_pick(news) for news in latest_news]
+            lines.append("")
+            lines.append("Напиши /test_post {id} чтобы сгенерировать пост по этой новости")
+            await message.answer("\n".join(lines))
             return
         try:
             news_id = int(command.args.strip())
