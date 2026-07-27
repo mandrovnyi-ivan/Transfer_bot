@@ -149,6 +149,29 @@ def render_test_post_pick(news) -> str:
     return f"[{news.id}] {emoji} {player} · {from_club} → {to_club} · {source_name} · ⭐{stars}"
 
 
+def _truncate_button_text(value: str | None, limit: int) -> str:
+    text = (value or "—").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)].rstrip() + "…"
+
+
+def test_post_keyboard(news_items: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for news in news_items:
+        emoji = TYPE_EMOJI.get(news.source_tier or "rumor", TYPE_EMOJI["rumor"])
+        player = _truncate_button_text(news.player_name, 18)
+        to_club = _truncate_button_text(news.to_club, 14)
+        stars = int(news.stars or 0)
+        builder.row(
+            InlineKeyboardButton(
+                text=f"{emoji} {player} · {to_club} · ⭐{stars}",
+                callback_data=f"testpost:{news.id}",
+            )
+        )
+    return builder.as_markup()
+
+
 async def send_text_chunks(bot: Bot, chat_id: int, blocks: list[str], *, parse_mode: str = "HTML") -> None:
     current = ""
     for block in blocks:
@@ -348,14 +371,14 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
         if not await ensure_owner(message):
             return
         if not command.args:
-            latest_news = await state.database.latest_news(10)
+            latest_news = await state.database.latest_news(3)
             if not latest_news:
                 await message.answer("В базе пока нет новостей.")
                 return
-            lines = [render_test_post_pick(news) for news in latest_news]
-            lines.append("")
-            lines.append("Напиши /test_post {id} чтобы сгенерировать пост по этой новости")
-            await message.answer("\n".join(lines))
+            await message.answer(
+                "Выбери новость для теста:",
+                reply_markup=test_post_keyboard(latest_news),
+            )
             return
         try:
             news_id = int(command.args.strip())
@@ -364,6 +387,14 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             return
         await message.answer(f"Генерирую пост для news_id={news_id}…")
         await generate_and_send_post(news_id=news_id, message=message)
+
+    @router.callback_query(F.data.startswith("testpost:"))
+    async def test_post_pick_handler(callback: CallbackQuery) -> None:
+        if not await ensure_owner(callback):
+            return
+        news_id = int(callback.data.split(":", 1)[1])
+        await callback.answer("Генерирую пост…")
+        await generate_and_send_post(news_id=news_id, callback=callback)
 
     @router.callback_query(F.data.startswith("post:"))
     async def post_handler(callback: CallbackQuery) -> None:
