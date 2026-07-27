@@ -37,6 +37,7 @@ class AppState:
     pipeline: TransferPipeline
     source_statuses: dict[str, SourceStatus]
     bot_timezone: str
+    target_channel_id: str
     notifications_paused: bool = False
 
 
@@ -50,9 +51,12 @@ def notification_keyboard(news_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def regeneration_keyboard(news_id: int) -> InlineKeyboardMarkup:
+def draft_post_keyboard(post_id: int, *, has_comment: bool) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.row(InlineKeyboardButton(text="🔄 Ещё раз", callback_data=f"regen:{news_id}"))
+    buttons = [InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"publish:{post_id}")]
+    if not has_comment:
+        buttons.append(InlineKeyboardButton(text="💬 Добавить комментарий", callback_data=f"addcomment:{post_id}"))
+    builder.row(*buttons)
     return builder.as_markup()
 
 
@@ -226,7 +230,7 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
         message: Message | None = None,
     ) -> None:
         try:
-            result = await state.pipeline.generate_post_for_news(news_id)
+            result = await state.pipeline.generate_short_post_for_news(news_id)
         except LookupError:
             if callback is not None:
                 await callback.answer("Для этой карточки пост недоступен.", show_alert=True)
@@ -248,7 +252,7 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             state.owner_id,
             text,
             disable_web_page_preview=True,
-            reply_markup=regeneration_keyboard(news_id),
+            reply_markup=draft_post_keyboard(result.post_id, has_comment=result.has_comment),
         )
 
     async def ensure_owner(message: Message | CallbackQuery) -> bool:
@@ -369,13 +373,62 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
         await callback.answer("Генерирую пост…")
         await generate_and_send_post(news_id=news_id, callback=callback)
 
-    @router.callback_query(F.data.startswith("regen:"))
-    async def regen_handler(callback: CallbackQuery) -> None:
+    @router.callback_query(F.data.startswith("addcomment:"))
+    async def add_comment_handler(callback: CallbackQuery) -> None:
         if not await ensure_owner(callback):
             return
-        news_id = int(callback.data.split(":", 1)[1])
-        await callback.answer("Генерирую ещё раз…")
-        await generate_and_send_post(news_id=news_id, callback=callback)
+        post_id = int(callback.data.split(":", 1)[1])
+        try:
+            result = await state.pipeline.add_comment_to_post(post_id)
+        except LookupError:
+            await callback.answer("Черновик не найден.", show_alert=True)
+            return
+        except Exception:
+            LOGGER.exception("Failed to add comment for post #%s", post_id)
+            await callback.answer("Не удалось добавить комментарий. Попробуйте ещё раз через минуту.", show_alert=True)
+            return
+        await callback.message.edit_text(
+            result.text,
+            disable_web_page_preview=True,
+            reply_markup=draft_post_keyboard(result.post_id, has_comment=True),
+        )
+        await callback.answer("Комментарий добавлен.")
+
+    @router.callback_query(F.data.startswith("publish:"))
+    async def publish_handler(callback: CallbackQuery) -> None:
+        if not await ensure_owner(callback):
+            return
+        post_id = int(callback.data.split(":", 1)[1])
+        if not state.target_channel_id:
+            await callback.answer("TARGET_CHANNEL_ID не настроен.", show_alert=True)
+            return
+        try:
+            draft = await state.pipeline.get_draft_post(post_id)
+        except LookupError:
+            await callback.answer("Черновик не найден.", show_alert=True)
+            return
+        if draft.is_published:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.answer("Этот пост уже опубликован.")
+            return
+        try:
+            published_message = await bot.send_message(
+                state.target_channel_id,
+                draft.text,
+                disable_web_page_preview=True,
+            )
+            await state.database.mark_post_published(post_id, channel_message_id=published_message.message_id)
+        except Exception:
+            LOGGER.exception("Failed to publish post #%s", post_id)
+            await callback.answer("Не удалось опубликовать пост.", show_alert=True)
+            return
+        published_text = f"{draft.text}\n\n✅ Опубликовано"
+        await callback.message.edit_text(
+            published_text,
+            disable_web_page_preview=True,
+            reply_markup=None,
+        )
+        await callback.answer("Опубликовано.")
 
     dispatcher.include_router(router)
     return router

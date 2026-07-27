@@ -16,8 +16,8 @@ try:
 except ImportError:  # pragma: no cover - exercised only without runtime deps
     AsyncAnthropic = None  # type: ignore[assignment]
 
-from db import Database, NewsRow, utcnow_iso
-from generator import GenerationResult, PostGenerator
+from db import Database, NewsRow, PostRow, utcnow_iso
+from generator import CommentResult, PostGenerator, ShortPostResult
 from reliability import BASE_STARS, calculate_reliability
 from settings import Settings
 from sources import RawNews
@@ -60,6 +60,15 @@ class NotificationNews:
     previous_stars: int | None = None
     mention_count: int = 1
     source_names: list[str] | None = None
+
+
+@dataclass(slots=True)
+class DraftPost:
+    post_id: int
+    news_id: int
+    text: str
+    has_comment: bool
+    is_published: bool
 
 
 Notifier = Callable[[NotificationNews], Awaitable[None]]
@@ -339,12 +348,59 @@ TEXT: {item.raw_text}
                 delay *= 2
         raise RuntimeError(f"transfer extraction failed: {last_error}")
 
-    async def generate_post_for_news(self, news_id: int) -> GenerationResult:
+    async def generate_short_post_for_news(self, news_id: int) -> DraftPost:
         news = await self.require_news(news_id)
+        stars = int(news.stars or 1)
+        result = await self.generator.generate_news(
+            source_name=news.source_name or "Unknown source",
+            source_url=news.url or "",
+            source_tier=news.source_tier or "rumor",
+            title=news.title or "",
+            raw_text=news.raw_text or "",
+            player_name=news.player_name or "Неизвестный игрок",
+            from_club=news.from_club,
+            to_club=news.to_club,
+            fee=news.fee,
+            news_type=news.news_type or "rumor",
+            stars=stars,
+        )
+        post_id = await self.database.save_post(
+            news_id=news.id,
+            content_json={
+                "news": result.news,
+                "comment": None,
+                "text": result.text,
+                "has_comment": False,
+            },
+            insert_used="",
+        )
+        if result.problems:
+            LOGGER.warning("Post validation fallback for news #%s: %s", news.id, ", ".join(result.problems))
+        return DraftPost(
+            post_id=post_id,
+            news_id=news.id,
+            text=result.text,
+            has_comment=False,
+            is_published=False,
+        )
+
+    async def add_comment_to_post(self, post_id: int) -> DraftPost:
+        post = await self.require_post(post_id)
+        payload = self._post_payload(post)
+        if payload.get("has_comment"):
+            return DraftPost(
+                post_id=post.id,
+                news_id=post.news_id,
+                text=str(payload.get("text") or ""),
+                has_comment=True,
+                is_published=bool(post.published_at),
+            )
+
+        news = await self.require_news(post.news_id)
         recent_inserts = await self.database.recent_inserts(5, exclude_news_id=news.id)
         stars = int(news.stars or 1)
         reasons = calculate_reliability(news.source_tier or "rumor", news.news_type or "rumor")[1]
-        result = await self.generator.generate(
+        result = await self.generator.generate_comment(
             source_name=news.source_name or "Unknown source",
             source_url=news.url or "",
             source_tier=news.source_tier or "rumor",
@@ -357,27 +413,56 @@ TEXT: {item.raw_text}
             news_type=news.news_type or "rumor",
             stars=stars,
             reasons=reasons,
+            news=str(payload.get("news") or ""),
             recent_inserts=recent_inserts,
         )
-        await self.database.save_post(
-            news_id=news.id,
-            content_json={
-                "news": result.payload.news,
-                "reliability_note": result.payload.reliability_note,
-                "comment": result.payload.comment,
-                "text": result.text,
-            },
-            insert_used=result.payload.insert_used,
-        )
+        updated_payload = {
+            "news": payload.get("news") or "",
+            "comment": result.comment,
+            "text": result.text,
+            "has_comment": True,
+        }
+        await self.database.update_post(post.id, content_json=updated_payload, insert_used=result.insert_used)
         if result.problems:
-            LOGGER.warning("Post validation fallback for news #%s: %s", news.id, ", ".join(result.problems))
-        return result
+            LOGGER.warning("Comment validation fallback for post #%s: %s", post.id, ", ".join(result.problems))
+        return DraftPost(
+            post_id=post.id,
+            news_id=post.news_id,
+            text=result.text,
+            has_comment=True,
+            is_published=bool(post.published_at),
+        )
+
+    async def get_draft_post(self, post_id: int) -> DraftPost:
+        post = await self.require_post(post_id)
+        payload = self._post_payload(post)
+        return DraftPost(
+            post_id=post.id,
+            news_id=post.news_id,
+            text=str(payload.get("text") or ""),
+            has_comment=bool(payload.get("has_comment")),
+            is_published=bool(post.published_at),
+        )
 
     async def require_news(self, news_id: int) -> NewsRow:
         news = await self.database.get_news(news_id)
         if news is None:
             raise LookupError(f"news #{news_id} not found")
         return news
+
+    async def require_post(self, post_id: int) -> PostRow:
+        post = await self.database.get_post(post_id)
+        if post is None:
+            raise LookupError(f"post #{post_id} not found")
+        return post
+
+    @staticmethod
+    def _post_payload(post: PostRow) -> dict[str, Any]:
+        try:
+            payload = json.loads(post.content_json or "{}")
+        except Exception:
+            payload = {}
+        return payload if isinstance(payload, dict) else {}
 
     @staticmethod
     def _none_if_empty(value: Any) -> str | None:

@@ -28,7 +28,7 @@ SYSTEM_PROMPT = """
 
 Ты работаешь ТОЛЬКО с фактами из RAW_CONTEXT. Запрещено добавлять статистику,
 которой нет в переданном тексте. Не хватает цифры — не выдумывай, строй
-аргумент на логике (позиция, возраст, конкуренция в составе, глубина скамейки).
+аргумент на логике.
 
 ЗАПРЕЩЕНО:
 — «Толпа видит… но алгоритм видит…» и любые варианты.
@@ -115,19 +115,18 @@ TIER_EMOJI = {
 
 
 @dataclass(slots=True)
-class GeneratedPost:
+class ShortPostResult:
     news: str
-    reliability_note: str
-    comment: str
-    insert_used: str
+    text: str
+    problems: list[str]
 
 
 @dataclass(slots=True)
-class GenerationResult:
-    payload: GeneratedPost
+class CommentResult:
+    comment: str
+    insert_used: str
     text: str
     problems: list[str]
-    warnings: list[str]
 
 
 def render_stars(stars: int) -> str:
@@ -139,21 +138,23 @@ def render_tier_emoji(source_tier: str) -> str:
     return TIER_EMOJI.get(source_tier, TIER_EMOJI["rumor"])
 
 
-def build_post_text(
+def build_short_post_text(
     *,
     source_name: str,
-    source_url: str,
     source_tier: str,
     stars: int,
-    payload: GeneratedPost,
+    news: str,
+    comment: str | None = None,
 ) -> str:
-    return (
-        f"{render_tier_emoji(source_tier)} {payload.news}\n\n"
-        f"📡 {source_name}\n"
-        f"Надёжность: {render_stars(stars)}\n"
-        f"{payload.reliability_note}\n\n"
-        f"{payload.comment}"
-    )
+    parts = [
+        f"{render_tier_emoji(source_tier)} {news.strip()}",
+        "",
+        f"📡 {source_name}",
+        f"Надёжность: {render_stars(stars)}",
+    ]
+    if comment:
+        parts.extend(["", comment.strip()])
+    return "\n".join(parts)
 
 
 def extract_used_inserts(text: str) -> list[str]:
@@ -184,7 +185,6 @@ def choose_insert(*, detected: list[str], insert_used: str, stars: int, recent_i
         for insert in ALL_INSERTS
         if insert not in recent and not (stars == 5 and insert in SKEPTICISM_INSERTS)
     ]
-
     if len(detected) == 1 and detected[0] in candidates:
         return detected[0]
     if insert_used and insert_used in candidates:
@@ -202,90 +202,69 @@ def apply_insert_to_comment(comment: str, insert: str) -> str:
     return f"{insert.capitalize()} {head}"
 
 
-def repair_generated_post(payload: GeneratedPost, *, stars: int, recent_inserts: list[str]) -> GeneratedPost:
-    normalized_insert = normalize_insert_value(payload.insert_used)
-    cleaned_news = strip_known_inserts(payload.news)
-    detected = extract_used_inserts(f"{cleaned_news}\n{payload.comment}")
-    chosen_insert = choose_insert(
-        detected=detected,
-        insert_used=normalized_insert,
-        stars=stars,
-        recent_inserts=recent_inserts,
-    )
-    cleaned_comment = apply_insert_to_comment(payload.comment, chosen_insert)
-    return GeneratedPost(
-        news=cleaned_news,
-        reliability_note=payload.reliability_note.strip(),
-        comment=cleaned_comment,
-        insert_used=chosen_insert,
-    )
-
-
-def validate_post_payload(
-    payload: GeneratedPost,
-    *,
-    stars: int,
-    recent_inserts: list[str],
-    source_name: str,
-    source_url: str,
-    source_tier: str,
-) -> tuple[list[str], str]:
-    text = build_post_text(
-        source_name=source_name,
-        source_url=source_url,
-        source_tier=source_tier,
-        stars=stars,
-        payload=payload,
-    )
+def validate_news_text(news: str) -> list[str]:
     problems: list[str] = []
-
-    if not 240 <= len(text) <= 420:
-        problems.append("длина вне диапазона 240–420")
-
-    used_inserts = extract_used_inserts(f"{payload.news}\n{payload.comment}")
-    if len(used_inserts) != 1:
-        problems.append("нужна ровно одна конструкция из списка")
-    if payload.insert_used.casefold() not in used_inserts:
-        problems.append("insert_used не совпадает с текстом")
-    if normalize_insert_value(payload.insert_used) in {normalize_insert_value(item) for item in recent_inserts}:
-        problems.append("insert_used уже был в recent_inserts")
-    if stars == 5 and payload.insert_used.casefold() in SKEPTICISM_INSERTS:
-        problems.append("скепсис запрещён при 5 звёздах")
-
-    joined_lower = f"{payload.news}\n{payload.reliability_note}\n{payload.comment}".casefold()
+    cleaned = news.strip()
+    if not 80 <= len(cleaned) <= 600:
+        problems.append("длина news вне диапазона 80–600")
+    if EMOJI_RE.search(cleaned):
+        problems.append("эмодзи запрещены в news")
+    if "!" in cleaned:
+        problems.append("восклицательные знаки запрещены в news")
+    lowered = cleaned.casefold()
     for phrase in BANNED_PHRASES:
-        if phrase in joined_lower:
+        if phrase in lowered:
             problems.append(f"запрещённая фраза: {phrase}")
             break
+    return problems
 
-    if "посмотрим" in joined_lower:
+
+def validate_comment_text(
+    comment: str,
+    *,
+    insert_used: str,
+    news: str,
+    stars: int,
+    recent_inserts: list[str],
+) -> list[str]:
+    problems: list[str] = []
+    cleaned = comment.strip()
+    used_inserts = extract_used_inserts(cleaned)
+    normalized_insert = normalize_insert_value(insert_used)
+
+    if len(used_inserts) != 1:
+        problems.append("нужна ровно одна конструкция из списка")
+    if normalized_insert and normalized_insert not in used_inserts:
+        problems.append("insert_used не совпадает с текстом")
+    recent = {normalize_insert_value(item) for item in recent_inserts}
+    if normalized_insert and normalized_insert in recent:
+        problems.append("insert_used уже был в recent_inserts")
+    if normalized_insert in SKEPTICISM_INSERTS and stars == 5:
+        problems.append("скепсис запрещён при 5 звёздах")
+
+    lowered = cleaned.casefold()
+    for phrase in BANNED_PHRASES:
+        if phrase in lowered:
+            problems.append(f"запрещённая фраза: {phrase}")
+            break
+    if "посмотрим" in lowered:
         problems.append("есть запрещённое слово «посмотрим»")
-
-    if EMOJI_RE.search(payload.news) or EMOJI_RE.search(payload.comment):
-        problems.append("эмодзи запрещены в news/comment")
-    if "!" in payload.news or "!" in payload.comment:
-        problems.append("восклицательные знаки запрещены в news/comment")
-
-    if fuzz.ratio(payload.news, payload.comment) >= 70:
+    if EMOJI_RE.search(cleaned):
+        problems.append("эмодзи запрещены в comment")
+    if "!" in cleaned:
+        problems.append("восклицательные знаки запрещены в comment")
+    if fuzz.ratio(news, cleaned) >= 70:
         problems.append("comment дублирует news")
-    if "надёжность:" in payload.reliability_note.casefold():
-        problems.append("reliability_note дублирует служебную строку")
-
-    return problems, text
+    return problems
 
 
-def parse_generation_json(text: str) -> GeneratedPost:
+def parse_json_object(text: str) -> dict[str, str]:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
     payload = json.loads(cleaned)
-    return GeneratedPost(
-        news=str(payload["news"]).strip(),
-        reliability_note=str(payload["reliability_note"]).strip(),
-        comment=str(payload["comment"]).strip(),
-        insert_used=str(payload["insert_used"]).strip(),
-    )
+    return {str(key): str(value).strip() for key, value in payload.items()}
 
 
 class PostGenerator:
@@ -295,7 +274,59 @@ class PostGenerator:
         self.client = AsyncAnthropic(api_key=api_key)
         self.model = model
 
-    async def generate(
+    async def generate_news(
+        self,
+        *,
+        source_name: str,
+        source_url: str,
+        source_tier: str,
+        title: str,
+        raw_text: str,
+        player_name: str,
+        from_club: str | None,
+        to_club: str | None,
+        fee: str | None,
+        news_type: str,
+        stars: int,
+    ) -> ShortPostResult:
+        problems_hint: list[str] = []
+        best_news = ""
+        best_text = ""
+        best_problems: list[str] | None = None
+
+        for _ in range(2):
+            news = await self._call_news_model(
+                source_name=source_name,
+                source_url=source_url,
+                source_tier=source_tier,
+                title=title,
+                raw_text=raw_text,
+                player_name=player_name,
+                from_club=from_club,
+                to_club=to_club,
+                fee=fee,
+                news_type=news_type,
+                stars=stars,
+                failed_checks=problems_hint,
+            )
+            problems = validate_news_text(news)
+            text = build_short_post_text(
+                source_name=source_name,
+                source_tier=source_tier,
+                stars=stars,
+                news=news,
+            )
+            if best_problems is None or len(problems) < len(best_problems):
+                best_news = news
+                best_text = text
+                best_problems = list(problems)
+            if not problems:
+                return ShortPostResult(news=news, text=text, problems=[])
+            problems_hint = problems
+
+        return ShortPostResult(news=best_news, text=best_text, problems=best_problems or problems_hint)
+
+    async def generate_comment(
         self,
         *,
         source_name: str,
@@ -310,17 +341,17 @@ class PostGenerator:
         news_type: str,
         stars: int,
         reasons: list[str],
+        news: str,
         recent_inserts: list[str],
-    ) -> GenerationResult:
+    ) -> CommentResult:
         problems_hint: list[str] = []
-        last_payload: GeneratedPost | None = None
-        last_text = ""
-        best_payload: GeneratedPost | None = None
+        best_comment = ""
+        best_insert = ""
         best_text = ""
         best_problems: list[str] | None = None
 
-        for attempt in range(2):
-            payload = await self._call_model(
+        for _ in range(3):
+            comment, insert_used = await self._call_comment_model(
                 source_name=source_name,
                 source_url=source_url,
                 source_tier=source_tier,
@@ -333,36 +364,95 @@ class PostGenerator:
                 news_type=news_type,
                 stars=stars,
                 reasons=reasons,
+                news=news,
                 recent_inserts=recent_inserts,
                 failed_checks=problems_hint,
             )
-            payload = repair_generated_post(payload, stars=stars, recent_inserts=recent_inserts)
-            problems, text = validate_post_payload(
-                payload,
+            detected = extract_used_inserts(comment)
+            chosen_insert = choose_insert(
+                detected=detected,
+                insert_used=normalize_insert_value(insert_used),
                 stars=stars,
                 recent_inserts=recent_inserts,
-                source_name=source_name,
-                source_url=source_url,
-                source_tier=source_tier,
             )
-            last_payload = payload
-            last_text = text
+            repaired_comment = apply_insert_to_comment(comment, chosen_insert)
+            problems = validate_comment_text(
+                repaired_comment,
+                insert_used=chosen_insert,
+                news=news,
+                stars=stars,
+                recent_inserts=recent_inserts,
+            )
+            text = build_short_post_text(
+                source_name=source_name,
+                source_tier=source_tier,
+                stars=stars,
+                news=news,
+                comment=repaired_comment,
+            )
             if best_problems is None or len(problems) < len(best_problems):
-                best_payload = payload
+                best_comment = repaired_comment
+                best_insert = chosen_insert
                 best_text = text
                 best_problems = list(problems)
             if not problems:
-                return GenerationResult(payload=payload, text=text, problems=[], warnings=[])
+                return CommentResult(
+                    comment=repaired_comment,
+                    insert_used=chosen_insert,
+                    text=text,
+                    problems=[],
+                )
             problems_hint = problems
 
-        return GenerationResult(
-            payload=best_payload or last_payload or GeneratedPost(news="", reliability_note="", comment="", insert_used=""),
-            text=best_text or last_text,
+        return CommentResult(
+            comment=best_comment,
+            insert_used=best_insert,
+            text=best_text,
             problems=best_problems or problems_hint,
-            warnings=[],
         )
 
-    async def _call_model(
+    async def _call_news_model(
+        self,
+        *,
+        source_name: str,
+        source_url: str,
+        source_tier: str,
+        title: str,
+        raw_text: str,
+        player_name: str,
+        from_club: str | None,
+        to_club: str | None,
+        fee: str | None,
+        news_type: str,
+        stars: int,
+        failed_checks: list[str],
+    ) -> str:
+        user_prompt = f"""
+RAW_CONTEXT:
+- source_name: {source_name}
+- source_tier: {source_tier}
+- source_url: {source_url}
+- title: {title}
+- raw_text: {raw_text}
+- player_name: {player_name}
+- from_club: {from_club or "не указано"}
+- to_club: {to_club or "не указано"}
+- fee: {fee or "не указана"}
+- type: {news_type}
+- stars: {render_stars(stars)}
+
+ЗАДАЧА:
+- Верни только JSON: {{"news":"..."}}
+- Сгенерируй только блок news.
+- News должен быть 1–3 предложения, сухо, без оценки, только факты из RAW_CONTEXT.
+- Не добавляй комментарий, обоснование надёжности, ссылку или оформление.
+""".strip()
+        if failed_checks:
+            user_prompt += "\n\nИсправь ошибки предыдущей версии: " + "; ".join(failed_checks)
+        payload = await self._call_model_json(user_prompt)
+        return payload.get("news", "").strip()
+
+    async def _call_comment_model(
         self,
         *,
         source_name: str,
@@ -377,9 +467,10 @@ class PostGenerator:
         news_type: str,
         stars: int,
         reasons: list[str],
+        news: str,
         recent_inserts: list[str],
         failed_checks: list[str],
-    ) -> GeneratedPost:
+    ) -> tuple[str, str]:
         user_prompt = f"""
 RAW_CONTEXT:
 - source_name: {source_name}
@@ -394,25 +485,25 @@ RAW_CONTEXT:
 - type: {news_type}
 - stars: {render_stars(stars)}
 - reasons: {", ".join(reasons)}
+- news: {news}
 - recent_inserts: {", ".join(recent_inserts) if recent_inserts else "нет"}
 
-ПРАВИЛА:
-- Пост 240–420 знаков вместе с итоговой сборкой.
-- Четыре блока: новость → источник → звёзды → комментарий.
-- Пиши очень компактно: news 1–2 коротких предложения, reliability_note 1 короткое предложение, comment 2 коротких предложения.
-- В блоке comment нужна радикальная однозначная позиция без «посмотрим» и «время покажет».
-- В comment ОБЯЗАТЕЛЬНО используй ровно одну конструкцию из списка, а поле insert_used верни точной строкой этой конструкции.
-- В reliability_note не пиши служебные строки вроде «Надёжность: ★★★★★» и не повторяй оформление итогового шаблона.
-- Используй только факты из RAW_CONTEXT.
-- Верни строго JSON:
-  {{"news":"...","reliability_note":"...","comment":"...","insert_used":"..."}}
+ЗАДАЧА:
+- Верни только JSON: {{"comment":"...","insert_used":"..."}}
+- Comment должен быть 2–3 предложения в tone of voice бренда.
+- Нужна радикальная позиция без «посмотрим» и «время покажет».
+- Используй ровно одну человечную конструкцию из набора и верни её точной строкой в insert_used.
+- Не повторяй news и не выдумывай факты вне RAW_CONTEXT.
 
 Эталонные примеры:
 {EXAMPLES}
 """.strip()
         if failed_checks:
             user_prompt += "\n\nИсправь ошибки предыдущей версии: " + "; ".join(failed_checks)
+        payload = await self._call_model_json(user_prompt)
+        return payload.get("comment", "").strip(), payload.get("insert_used", "").strip()
 
+    async def _call_model_json(self, user_prompt: str) -> dict[str, str]:
         delay = 1.0
         last_error: Exception | None = None
         for attempt in range(3):
@@ -424,7 +515,7 @@ RAW_CONTEXT:
                     messages=[{"role": "user", "content": user_prompt}],
                 )
                 text = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
-                return parse_generation_json(text)
+                return parse_json_object(text)
             except Exception as exc:
                 last_error = exc
                 if attempt == 2:

@@ -37,6 +37,17 @@ class NewsRow:
     created_at: str | None
 
 
+@dataclass(slots=True)
+class PostRow:
+    id: int
+    news_id: int
+    content_json: str | None
+    insert_used: str | None
+    created_at: str | None
+    published_at: str | None
+    channel_message_id: int | None
+
+
 class Database:
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
@@ -88,6 +99,8 @@ class Database:
                     news_id INTEGER REFERENCES news(id),
                     content_json TEXT,
                     insert_used TEXT,
+                    published_at TIMESTAMP,
+                    channel_message_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -97,6 +110,8 @@ class Database:
             await self._ensure_news_column(db, "mention_count", "INTEGER DEFAULT 1")
             await self._ensure_news_column(db, "source_names_json", "TEXT DEFAULT '[]'")
             await self._ensure_news_column(db, "last_seen_at", "TIMESTAMP")
+            await self._ensure_posts_column(db, "published_at", "TIMESTAMP")
+            await self._ensure_posts_column(db, "channel_message_id", "INTEGER")
             await db.commit()
 
     async def _ensure_news_column(self, db: aiosqlite.Connection, name: str, definition: str) -> None:
@@ -105,6 +120,13 @@ class Database:
         existing = {row["name"] for row in rows}
         if name not in existing:
             await db.execute(f"ALTER TABLE news ADD COLUMN {name} {definition}")
+
+    async def _ensure_posts_column(self, db: aiosqlite.Connection, name: str, definition: str) -> None:
+        async with db.execute("PRAGMA table_info(posts)") as cursor:
+            rows = await cursor.fetchall()
+        existing = {row["name"] for row in rows}
+        if name not in existing:
+            await db.execute(f"ALTER TABLE posts ADD COLUMN {name} {definition}")
 
     async def has_news_hash(self, news_hash: str) -> bool:
         async with self.connection() as db:
@@ -131,6 +153,12 @@ class Database:
             async with db.execute("SELECT * FROM news WHERE id = ?", (news_id,)) as cursor:
                 row = await cursor.fetchone()
         return NewsRow(**dict(row)) if row else None
+
+    async def get_post(self, post_id: int) -> PostRow | None:
+        async with self.connection() as db:
+            async with db.execute("SELECT * FROM posts WHERE id = ?", (post_id,)) as cursor:
+                row = await cursor.fetchone()
+        return PostRow(**dict(row)) if row else None
 
     async def latest_news(self, limit: int = 10) -> list[NewsRow]:
         async with self.connection() as db:
@@ -232,6 +260,22 @@ class Database:
             )
             await db.commit()
             return int(cursor.lastrowid)
+
+    async def update_post(self, post_id: int, *, content_json: dict[str, Any], insert_used: str | None) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                "UPDATE posts SET content_json = ?, insert_used = ? WHERE id = ?",
+                (json.dumps(content_json, ensure_ascii=False), insert_used, post_id),
+            )
+            await db.commit()
+
+    async def mark_post_published(self, post_id: int, *, channel_message_id: int) -> None:
+        async with self.connection() as db:
+            await db.execute(
+                "UPDATE posts SET published_at = ?, channel_message_id = ? WHERE id = ?",
+                (utcnow_iso(), channel_message_id, post_id),
+            )
+            await db.commit()
 
     async def recent_inserts(self, limit: int = 5, *, exclude_news_id: int | None = None) -> list[str]:
         where_clause = "WHERE insert_used IS NOT NULL AND insert_used != ''"

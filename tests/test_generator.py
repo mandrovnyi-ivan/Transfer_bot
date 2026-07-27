@@ -1,109 +1,83 @@
-from generator import GeneratedPost, validate_post_payload
+from generator import (
+    apply_insert_to_comment,
+    build_short_post_text,
+    validate_comment_text,
+    validate_news_text,
+)
 
 
-def make_payload(*, comment: str, insert_used: str = "наконец-то", news: str | None = None) -> GeneratedPost:
-    long_news = news or (
+def test_validate_news_accepts_compact_factual_block() -> None:
+    news = (
         "Флориан Виртц близок к переходу в Ливерпуль за 130 млн евро. "
-        "Сделка находится на стадии medical."
+        "Сделка перешла в стадию медосмотра после финального согласования условий."
     )
-    return GeneratedPost(
-        news=long_news,
-        reliability_note="Источник силён по этому рынку, а стадия сделки уже почти финальная.",
-        comment=comment,
-        insert_used=insert_used,
-    )
+    assert validate_news_text(news) == []
 
 
-def test_validation_accepts_valid_payload() -> None:
-    payload = make_payload(
-        comment=(
-            "Наконец-то клуб берёт игрока под старт, а не в ротацию. "
-            "Для позиционной атаки это дорогая, но логичная ставка."
-        )
+def test_validate_news_rejects_short_text() -> None:
+    problems = validate_news_text("Виртц близок к переходу.")
+    assert "длина news вне диапазона 80–600" in problems
+
+
+def test_build_short_post_text_without_comment() -> None:
+    text = build_short_post_text(
+        source_name="Plettigoal",
+        source_tier="tier1",
+        stars=4,
+        news="Оттавио близок к переходу в ПСЖ после согласования суммы и личных условий.",
     )
-    problems, text = validate_post_payload(
-        payload,
+    assert text.startswith("🔵 ")
+    assert "Надёжность: ★★★★☆" in text
+    assert "💬" not in text
+
+
+def test_validate_comment_accepts_single_human_insert() -> None:
+    comment = (
+        "Наконец-то клуб добирает игрока именно под слабую позицию. "
+        "По логике состава этот трансфер давно напрашивался."
+    )
+    problems = validate_comment_text(
+        comment,
+        insert_used="наконец-то",
+        news="Оттавио близок к переходу в ПСЖ после согласования суммы.",
         stars=4,
         recent_inserts=["к сожалению"],
-        source_name="BBC Sport Football",
-        source_url="https://example.com/news",
-        source_tier="tier1",
     )
     assert problems == []
-    assert 240 <= len(text) <= 420
-    assert text.startswith("🔵 ")
 
 
-def test_validation_rejects_recent_insert_reuse() -> None:
-    payload = make_payload(
-        comment=(
-            "Наконец-то клуб закрывает позицию без лишнего торга. "
-            "Решение дорогое, но спортивная логика у него есть."
-        )
+def test_validate_comment_rejects_recent_insert_reuse() -> None:
+    comment = (
+        "Наконец-то клуб закрывает дыру в составе без лишнего шума. "
+        "Для этой позиции ход выглядит логичным."
     )
-    problems, _ = validate_post_payload(
-        payload,
+    problems = validate_comment_text(
+        comment,
+        insert_used="наконец-то",
+        news="Оттавио близок к переходу в ПСЖ после согласования суммы.",
         stars=4,
         recent_inserts=["наконец-то"],
-        source_name="BBC Sport Football",
-        source_url="https://example.com/news",
-        source_tier="tier1",
     )
     assert "insert_used уже был в recent_inserts" in problems
 
 
-def test_validation_rejects_skepticism_with_five_stars() -> None:
-    payload = make_payload(
-        comment=(
-            "Верится с трудом, хотя формально источник сильный и сумма уже названа. "
-            "Сам переход выглядит спорно для структуры состава."
-        ),
-        insert_used="верится с трудом",
+def test_validate_comment_rejects_skepticism_with_five_stars() -> None:
+    comment = (
+        "Верится с трудом, хотя сделка уже подтверждена клубом. "
+        "Сам выбор всё равно выглядит спорно."
     )
-    problems, _ = validate_post_payload(
-        payload,
+    problems = validate_comment_text(
+        comment,
+        insert_used="верится с трудом",
+        news="Клуб официально объявил о переходе игрока.",
         stars=5,
         recent_inserts=[],
-        source_name="BBC Sport Football",
-        source_url="https://example.com/news",
-        source_tier="tier1",
     )
     assert "скепсис запрещён при 5 звёздах" in problems
 
 
-def test_validation_rejects_banned_phrase() -> None:
-    payload = make_payload(
-        comment=(
-            "Наконец-то состав получает нужный профиль. Толпа видит громкое имя, но алгоритм видит правильную роль в структуре."
-        )
-    )
-    problems, _ = validate_post_payload(
-        payload,
-        stars=4,
-        recent_inserts=[],
-        source_name="BBC Sport Football",
-        source_url="https://example.com/news",
-        source_tier="tier1",
-    )
-    assert any(problem.startswith("запрещённая фраза") for problem in problems)
-
-
-def test_validation_rejects_duplicate_comment() -> None:
-    duplicate = (
-        "Флориан Виртц близок к переходу в Ливерпуль за 130 млн евро. "
-        "Сделка находится на стадии medical."
-    )
-    payload = make_payload(
-        news=duplicate,
-        comment=f"Неожиданно, {duplicate[0].lower()}{duplicate[1:]}",
-        insert_used="неожиданно",
-    )
-    problems, _ = validate_post_payload(
-        payload,
-        stars=4,
-        recent_inserts=[],
-        source_name="BBC Sport Football",
-        source_url="https://example.com/news",
-        source_tier="tier1",
-    )
-    assert "comment дублирует news" in problems
+def test_apply_insert_to_comment_replaces_old_insert() -> None:
+    comment = "К сожалению, клуб снова берёт игрока не под главную проблему состава."
+    repaired = apply_insert_to_comment(comment, "неожиданно")
+    assert repaired.startswith("Неожиданно ")
+    assert "К сожалению" not in repaired

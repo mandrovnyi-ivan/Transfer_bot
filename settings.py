@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     bot_timezone: str = Field(default="Europe/Prague", alias="BOT_TIMEZONE")
     only_today_news: bool = Field(default=True, alias="ONLY_TODAY_NEWS")
+    target_channel_id: str = Field(default="", alias="TARGET_CHANNEL_ID")
 
     @property
     def database_path(self) -> Path:

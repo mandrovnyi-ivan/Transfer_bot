@@ -168,6 +168,7 @@ async def main() -> None:
         pipeline=None,  # type: ignore[arg-type]
         source_statuses={},
         bot_timezone=settings.bot_timezone,
+        target_channel_id=settings.target_channel_id,
     )
     owner_notifier = OwnerNotifier(telegram_bot, state)
     pipeline = TransferPipeline(
