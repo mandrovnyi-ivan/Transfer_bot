@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import re
 from dataclasses import dataclass
@@ -141,15 +142,23 @@ def render_tier_emoji(source_tier: str) -> str:
 def build_short_post_text(
     *,
     source_name: str,
+    source_url: str,
     source_tier: str,
     stars: int,
     news: str,
     comment: str | None = None,
 ) -> str:
+    escaped_source_name = html.escape(source_name or "Источник неизвестен", quote=False)
+    escaped_source_url = html.escape(source_url or "", quote=True)
+    source_line = (
+        f'📡 <a href="{escaped_source_url}">{escaped_source_name}</a>'
+        if escaped_source_url
+        else f"📡 {escaped_source_name}"
+    )
     parts = [
         f"{render_tier_emoji(source_tier)} {news.strip()}",
         "",
-        f"📡 {source_name}",
+        source_line,
         f"Надёжность: {render_stars(stars)}",
     ]
     if comment:
@@ -312,6 +321,7 @@ class PostGenerator:
             problems = validate_news_text(news)
             text = build_short_post_text(
                 source_name=source_name,
+                source_url=source_url,
                 source_tier=source_tier,
                 stars=stars,
                 news=news,
@@ -385,6 +395,7 @@ class PostGenerator:
             )
             text = build_short_post_text(
                 source_name=source_name,
+                source_url=source_url,
                 source_tier=source_tier,
                 stars=stars,
                 news=news,

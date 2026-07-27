@@ -22,13 +22,27 @@ def test_validate_news_rejects_short_text() -> None:
 def test_build_short_post_text_without_comment() -> None:
     text = build_short_post_text(
         source_name="Plettigoal",
+        source_url="https://x.com/Plettigoal/status/123",
         source_tier="tier1",
         stars=4,
         news="Оттавио близок к переходу в ПСЖ после согласования суммы и личных условий.",
     )
     assert text.startswith("🔵 ")
     assert "Надёжность: ★★★★☆" in text
+    assert '📡 <a href="https://x.com/Plettigoal/status/123">Plettigoal</a>' in text
     assert "💬" not in text
+
+
+def test_build_short_post_text_without_url_falls_back_to_plain_source() -> None:
+    text = build_short_post_text(
+        source_name="BBC & Sport",
+        source_url="",
+        source_tier="tier1",
+        stars=4,
+        news="Оттавио близок к переходу в ПСЖ после согласования суммы и личных условий.",
+    )
+    assert "📡 BBC &amp; Sport" in text
+    assert "<a href=" not in text
 
 
 def test_validate_comment_accepts_single_human_insert() -> None:
