@@ -163,7 +163,7 @@ async def main() -> None:
 
     post_generator = PostGenerator(settings.anthropic_api_key, settings.generation_model)
     state = AppState(
-        owner_id=settings.owner_id,
+        allowed_user_ids=set(settings.allowed_user_ids),
         database=database,
         pipeline=None,  # type: ignore[arg-type]
         source_statuses={},

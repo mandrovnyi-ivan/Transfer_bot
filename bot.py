@@ -32,7 +32,7 @@ TYPE_EMOJI = {
 
 @dataclass(slots=True)
 class AppState:
-    owner_id: int
+    allowed_user_ids: set[int]
     database: Database
     pipeline: TransferPipeline
     source_statuses: dict[str, SourceStatus]
@@ -224,23 +224,25 @@ class OwnerNotifier:
         self.state = state
 
     async def send_news(self, payload: NotificationNews) -> None:
-        await self.bot.send_message(
-            self.state.owner_id,
-            format_notification(payload, self.state.bot_timezone),
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=notification_keyboard(payload.news_id),
-        )
+        for user_id in sorted(self.state.allowed_user_ids):
+            await self.bot.send_message(
+                user_id,
+                format_notification(payload, self.state.bot_timezone),
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=notification_keyboard(payload.news_id),
+            )
 
     async def send_source_disabled(self, status: SourceStatus) -> None:
-        await self.bot.send_message(
-            self.state.owner_id,
-            (
-                f"Источник отключён после 5 ошибок подряд.\n"
-                f"{status.display_name}\n"
-                f"Последняя ошибка: {status.last_error or '—'}"
-            ),
-        )
+        for user_id in sorted(self.state.allowed_user_ids):
+            await self.bot.send_message(
+                user_id,
+                (
+                    f"Источник отключён после 5 ошибок подряд.\n"
+                    f"{status.display_name}\n"
+                    f"Последняя ошибка: {status.last_error or '—'}"
+                ),
+            )
 
 
 def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
@@ -272,7 +274,7 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
 
         text = result.text
         await bot.send_message(
-            state.owner_id,
+            callback.from_user.id if callback is not None else message.from_user.id,
             text,
             disable_web_page_preview=True,
             reply_markup=draft_post_keyboard(result.post_id, has_comment=result.has_comment),
@@ -280,7 +282,7 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
 
     async def ensure_owner(message: Message | CallbackQuery) -> bool:
         user = message.from_user
-        if user and user.id == state.owner_id:
+        if user and user.id in state.allowed_user_ids:
             return True
         if isinstance(message, CallbackQuery):
             await message.answer("Доступ только владельцу", show_alert=True)
@@ -364,7 +366,7 @@ def setup_handlers(dispatcher: Dispatcher, bot: Bot, state: AppState) -> Router:
             f"rumor: {counts['rumor']} · "
             f"official: {counts['official']}"
         )
-        await send_text_chunks(bot, state.owner_id, blocks)
+        await send_text_chunks(bot, message.chat.id, blocks)
 
     @router.message(Command("test_post"))
     async def test_post_handler(message: Message, command: CommandObject) -> None:

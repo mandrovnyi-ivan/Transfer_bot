@@ -50,6 +50,7 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     owner_id: int = Field(alias="OWNER_ID")
+    allowed_users_raw: str = Field(default="", alias="ALLOWED_USERS")
     anthropic_api_key: str = Field(alias="ANTHROPIC_API_KEY")
     twitter_auth_token: str = Field(default="", alias="TWITTER_AUTH_TOKEN")
     rsshub_url: str = Field(default="http://rsshub:1200", alias="RSSHUB_URL")
@@ -71,6 +72,23 @@ class Settings(BaseSettings):
     @property
     def config_path(self) -> Path:
         return ROOT_DIR / "config.yaml"
+
+    @property
+    def allowed_user_ids(self) -> list[int]:
+        if self.allowed_users_raw.strip():
+            values = []
+            for chunk in self.allowed_users_raw.split(","):
+                text = chunk.strip()
+                if not text:
+                    continue
+                values.append(int(text))
+            unique: list[int] = []
+            for user_id in values:
+                if user_id not in unique:
+                    unique.append(user_id)
+            if unique:
+                return unique
+        return [self.owner_id]
 
 
 def load_sources_config(path: Path | None = None) -> SourcesConfig:
